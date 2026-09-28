@@ -1,0 +1,1757 @@
+<!DOCTYPE html>
+<html lang="id" class="h-full bg-slate-50">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Crew Break Attendance System</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#f0f7ff',
+              100: '#e0effe',
+              500: '#0284c7',
+              600: '#0369a1',
+              700: '#075985',
+              900: '#0c4a6e',
+            }
+          },
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+  <!-- QRCode.js for generating QR codes -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+  <!-- Html5-Qrcode for camera scanning -->
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+
+  <!-- Chart.js for reports -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <!-- XLSX SheetJS for Excel export -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: #f1f5f9;
+    }
+    html.dark .custom-scrollbar::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 4px;
+    }
+    html.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #334155;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+    @media print {
+      body * {
+        visibility: hidden;
+      }
+      #printable-qr-card, #printable-qr-card * {
+        visibility: visible;
+      }
+      #printable-qr-card {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+      }
+    }
+    .pulse-amber {
+      animation: pulseAmber 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+    @keyframes pulseAmber {
+      0%, 100% { opacity: 1; }
+      50% { opacity: .6; }
+    }
+  </style>
+</head>
+<body class="h-full flex flex-col text-slate-800 dark:text-slate-100 bg-slate-50 dark:bg-slate-900 antialiased selection:bg-brand-500 selection:text-white transition-colors duration-200">
+
+  <div id="app" class="min-h-screen flex flex-col flex-1">
+    <!-- UI dynamic content will be rendered here by JS -->
+  </div>
+
+  <script>
+    const APP_STATE = {
+      currentUser: null,
+      activeTab: 'dashboard',
+      theme: localStorage.getItem('cba_theme') || 'light',
+      crews: [],
+      breaks: [],
+      breakTypes: [],
+      auditLogs: [],
+      settings: {
+        googleSheetsUrl: '',
+        autoSheetsSync: true,
+        companyName: 'Kedai Kopi Utama',
+      },
+      scanner: null,
+      activeScanResult: null,
+      activeModal: null, // 'addCrew', 'editCrew', 'qrCode', 'sheetsConfig'
+      selectedCrewForModal: null,
+      searchQuery: '',
+      historyFilters: {
+        date: '',
+        crewId: '',
+        breakType: '',
+        status: ''
+      }
+    };
+
+    function applyTheme() {
+      if (APP_STATE.theme === 'dark') {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+      localStorage.setItem('cba_theme', APP_STATE.theme);
+    }
+
+    function toggleTheme() {
+      APP_STATE.theme = APP_STATE.theme === 'dark' ? 'light' : 'dark';
+      applyTheme();
+      renderApp();
+      showToast(`Mode ${APP_STATE.theme === 'dark' ? 'Gelap (Dark)' : 'Terang (Light)'} diaktifkan`, 'info');
+    }
+
+    // Helper functions for initial seed data
+    function initSeedData() {
+      applyTheme();
+      const initialBreakTypes = [
+        { id: 'bt_1', name: 'Meal Break', maxMinutes: 45, color: 'emerald' },
+        { id: 'bt_2', name: 'Short Break', maxMinutes: 15, color: 'blue' },
+        { id: 'bt_3', name: 'Personal Break', maxMinutes: 10, color: 'amber' },
+        { id: 'bt_4', name: 'Prayer Break', maxMinutes: 20, color: 'purple' },
+      ];
+
+      const initialCrews = [
+        { id: 'crw_1', crewId: 'CRW001', name: 'Budi Santoso', position: 'Senior Barista', department: 'Service', phone: '081234567890', status: 'Active', createdAt: '2026-01-10' },
+        { id: 'crw_2', crewId: 'CRW002', name: 'Siti Rahma', position: 'Cashier', department: 'Front Desk', phone: '081298765432', status: 'Active', createdAt: '2026-01-12' },
+        { id: 'crw_3', crewId: 'CRW003', name: 'Andi Wijaya', position: 'Kitchen Crew', department: 'Kitchen', phone: '081355554444', status: 'Active', createdAt: '2026-02-01' },
+        { id: 'crw_4', crewId: 'CRW004', name: 'Dewi Lestari', position: 'Waitress', department: 'Service', phone: '081711223344', status: 'Active', createdAt: '2026-02-15' },
+        { id: 'crw_5', crewId: 'CRW005', name: 'Rian Hidayat', position: 'Dishwasher', department: 'Kitchen', phone: '081899887766', status: 'Active', createdAt: '2026-03-01' },
+      ];
+
+      const todayStr = new Date().toISOString().split('T')[0];
+      const now = new Date();
+      
+      // Calculate times earlier today
+      const break1Start = new Date(now.getTime() - (25 * 60 * 1000)); // 25 mins ago
+      const break2Start = new Date(now.getTime() - (70 * 60 * 1000)); // 70 mins ago (Completed)
+      const break2End = new Date(now.getTime() - (25 * 60 * 1000));
+
+      const initialBreaks = [
+        {
+          id: 'brk_101',
+          crewId: 'CRW001',
+          crewName: 'Budi Santoso',
+          position: 'Senior Barista',
+          breakType: 'Meal Break',
+          maxMinutes: 45,
+          startTime: break1Start.toISOString(),
+          endTime: null,
+          durationSeconds: null,
+          startedBy: 'manager@email.com',
+          endedBy: null,
+          status: 'ON BREAK',
+          date: todayStr
+        },
+        {
+          id: 'brk_100',
+          crewId: 'CRW002',
+          crewName: 'Siti Rahma',
+          position: 'Cashier',
+          breakType: 'Short Break',
+          maxMinutes: 15,
+          startTime: break2Start.toISOString(),
+          endTime: break2End.toISOString(),
+          durationSeconds: 2700, // 45 mins
+          startedBy: 'manager@email.com',
+          endedBy: 'manager@email.com',
+          status: 'COMPLETED',
+          date: todayStr
+        }
+      ];
+
+      const initialLogs = [
+        { id: 'log_1', timestamp: new Date(now.getTime() - 25 * 60000).toISOString(), manager: 'manager@email.com', action: 'START BREAK', crewId: 'CRW001', crewName: 'Budi Santoso' },
+        { id: 'log_2', timestamp: new Date(now.getTime() - 70 * 60000).toISOString(), manager: 'manager@email.com', action: 'START BREAK', crewId: 'CRW002', crewName: 'Siti Rahma' },
+        { id: 'log_3', timestamp: new Date(now.getTime() - 25 * 60000).toISOString(), manager: 'manager@email.com', action: 'END BREAK', crewId: 'CRW002', crewName: 'Siti Rahma' }
+      ];
+
+      // Load local storage if available
+      const storedCrews = localStorage.getItem('cba_crews');
+      const storedBreaks = localStorage.getItem('cba_breaks');
+      const storedBreakTypes = localStorage.getItem('cba_breakTypes');
+      const storedLogs = localStorage.getItem('cba_auditLogs');
+      const storedUser = localStorage.getItem('cba_user');
+
+      APP_STATE.crews = storedCrews ? JSON.parse(storedCrews) : initialCrews;
+      APP_STATE.breaks = storedBreaks ? JSON.parse(storedBreaks) : initialBreaks;
+      APP_STATE.breakTypes = storedBreakTypes ? JSON.parse(storedBreakTypes) : initialBreakTypes;
+      APP_STATE.auditLogs = storedLogs ? JSON.parse(storedLogs) : initialLogs;
+      APP_STATE.currentUser = storedUser ? JSON.parse(storedUser) : null;
+    }
+
+    function saveData() {
+      localStorage.setItem('cba_crews', JSON.stringify(APP_STATE.crews));
+      localStorage.setItem('cba_breaks', JSON.stringify(APP_STATE.breaks));
+      localStorage.setItem('cba_breakTypes', JSON.stringify(APP_STATE.breakTypes));
+      localStorage.setItem('cba_auditLogs', JSON.stringify(APP_STATE.auditLogs));
+      if (APP_STATE.currentUser) {
+        localStorage.setItem('cba_user', JSON.stringify(APP_STATE.currentUser));
+      } else {
+        localStorage.removeItem('cba_user');
+      }
+    }
+
+    function addAuditLog(action, crewId, crewName) {
+      const log = {
+        id: 'log_' + Date.now(),
+        timestamp: new Date().toISOString(),
+        manager: APP_STATE.currentUser ? APP_STATE.currentUser.email : 'system',
+        action,
+        crewId,
+        crewName
+      };
+      APP_STATE.auditLogs.unshift(log);
+      saveData();
+    }
+
+    // Toast Notification System
+    function showToast(message, type = 'success') {
+      const toastContainer = document.getElementById('toast-container') || createToastContainer();
+      const toast = document.createElement('div');
+      
+      const bgColors = {
+        success: 'bg-emerald-600 text-white',
+        error: 'bg-rose-600 text-white',
+        warning: 'bg-amber-500 text-white',
+        info: 'bg-brand-600 text-white'
+      };
+
+      const icons = {
+        success: 'fa-circle-check',
+        error: 'fa-triangle-exclamation',
+        warning: 'fa-circle-exclamation',
+        info: 'fa-circle-info'
+      };
+
+      toast.className = `flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg transform transition-all duration-300 translate-y-2 opacity-0 text-sm font-medium ${bgColors[type] || bgColors.info}`;
+      toast.innerHTML = `
+        <i class="fa-solid ${icons[type] || icons.info} text-lg"></i>
+        <span>${message}</span>
+      `;
+
+      toastContainer.appendChild(toast);
+      
+      // Animate in
+      setTimeout(() => {
+        toast.classList.remove('translate-y-2', 'opacity-0');
+      }, 10);
+
+      // Remove after 3.5 seconds
+      setTimeout(() => {
+        toast.classList.add('opacity-0', 'translate-y-2');
+        setTimeout(() => toast.remove(), 300);
+      }, 3500);
+    }
+
+    function createToastContainer() {
+      const container = document.createElement('div');
+      container.id = 'toast-container';
+      container.className = 'fixed bottom-20 md:bottom-6 right-4 left-4 md:left-auto md:w-96 z-50 flex flex-col gap-2 pointer-events-none';
+      document.body.appendChild(container);
+      return container;
+    }
+
+    // Helper functions for time formatting
+    function formatTime(isoString) {
+      if (!isoString) return '-';
+      const d = new Date(isoString);
+      return d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    function formatDate(isoString) {
+      if (!isoString) return '-';
+      const d = new Date(isoString);
+      return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+
+    function formatDuration(seconds) {
+      if (seconds === null || seconds === undefined) return '-';
+      const hrs = Math.floor(seconds / 3600);
+      const mins = Math.floor((seconds % 3600) / 60);
+      const secs = Math.floor(seconds % 60);
+
+      const pad = (n) => n.toString().padStart(2, '0');
+      if (hrs > 0) {
+        return `${pad(hrs)}:${pad(mins)}:${pad(secs)}`;
+      }
+      return `${pad(mins)}:${pad(secs)}`;
+    }
+
+    function getElapsedTimeInSeconds(startTimeIso) {
+      const start = new Date(startTimeIso).getTime();
+      const now = new Date().getTime();
+      return Math.max(0, Math.floor((now - start) / 1000));
+    }
+
+    function renderLoginView() {
+      return `
+        <div class="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-slate-900 via-brand-900 to-slate-900">
+          <div class="w-full max-w-md bg-white rounded-3xl shadow-2xl p-8 border border-slate-100">
+            <div class="text-center mb-8">
+              <div class="w-16 h-16 bg-brand-500 rounded-2xl flex items-center justify-center mx-auto mb-4 text-white shadow-lg shadow-brand-500/30">
+                <i class="fa-solid fa-mug-hot text-3xl"></i>
+              </div>
+              <h1 class="text-2xl font-bold text-slate-900">Crew Break Attendance</h1>
+              <p class="text-sm text-slate-500 mt-1">Portal scanning & monitoring khusus Manager</p>
+            </div>
+
+            <form id="login-form" onsubmit="handleLogin(event)" class="space-y-5">
+              <div>
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-2">Email Manager</label>
+                <div class="relative">
+                  <i class="fa-solid fa-envelope absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                  <input 
+                    type="email" 
+                    id="login-email" 
+                    required 
+                    value="manager@email.com"
+                    class="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent text-slate-800 text-sm font-medium transition"
+                    placeholder="nama@email.com"
+                  >
+                </div>
+              </div>
+
+              <div>
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-2">Password</label>
+                <div class="relative">
+                  <i class="fa-solid fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                  <input 
+                    type="password" 
+                    id="login-password" 
+                    required 
+                    value="password123"
+                    class="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent text-slate-800 text-sm font-medium transition"
+                    placeholder="••••••••"
+                  >
+                </div>
+              </div>
+
+              <div class="flex items-center justify-between text-xs">
+                <label class="flex items-center gap-2 cursor-pointer text-slate-600">
+                  <input type="checkbox" checked class="rounded border-slate-300 text-brand-600 focus:ring-brand-500">
+                  <span>Ingat Saya</span>
+                </label>
+                <a href="#" onclick="showToast('Silakan hubungi Administrator Sistem untuk me-reset password Anda.', 'info'); return false;" class="text-brand-600 hover:text-brand-700 font-semibold">Lupa Password?</a>
+              </div>
+
+              <button 
+                type="submit" 
+                class="w-full py-3.5 bg-brand-600 hover:bg-brand-700 text-white font-semibold rounded-xl shadow-lg shadow-brand-600/25 transition active:scale-[0.99] flex items-center justify-center gap-2"
+              >
+                <span>Masuk Dashboard Manager</span>
+                <i class="fa-solid fa-arrow-right text-xs"></i>
+              </button>
+            </form>
+
+            <div class="mt-8 pt-6 border-t border-slate-100 text-center">
+              <p class="text-xs text-slate-400">
+                <i class="fa-solid fa-shield-halved text-emerald-500 mr-1"></i> Crew tidak perlu login. Scan QR langsung dari Manager.
+              </p>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function handleLogin(e) {
+      e.preventDefault();
+      const email = document.getElementById('login-email').value.trim();
+      const password = document.getElementById('login-password').value;
+
+      if (email && password) {
+        APP_STATE.currentUser = {
+          email,
+          name: email.split('@')[0].toUpperCase(),
+          role: 'Manager',
+          loginAt: new Date().toISOString()
+        };
+        saveData();
+        showToast(`Selamat datang, Manager (${APP_STATE.currentUser.name})!`, 'success');
+        renderApp();
+      }
+    }
+
+    function handleLogout() {
+      if (APP_STATE.scanner) {
+        stopScanner();
+      }
+      APP_STATE.currentUser = null;
+      saveData();
+      showToast('Anda telah logout.', 'info');
+      renderApp();
+    }
+
+    function renderNavigation() {
+      const active = APP_STATE.activeTab;
+      const activeBreaksCount = APP_STATE.breaks.filter(b => b.status === 'ON BREAK').length;
+
+      const navItems = [
+        { id: 'dashboard', label: 'Dashboard', icon: 'fa-chart-pie' },
+        { id: 'scan', label: 'Scan Crew', icon: 'fa-qrcode', highlight: true },
+        { id: 'active', label: 'Active Break', icon: 'fa-clock', badge: activeBreaksCount },
+        { id: 'history', label: 'Break History', icon: 'fa-rectangle-list' },
+        { id: 'crews', label: 'Data Crew', icon: 'fa-users' },
+        { id: 'reports', label: 'Laporan', icon: 'fa-chart-line' },
+        { id: 'settings', label: 'Pengaturan', icon: 'fa-sliders' },
+      ];
+
+      return `
+        <!-- Top Desktop Navbar -->
+        <header class="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 sticky top-0 z-30 transition-colors">
+          <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+              
+              <!-- Brand Logo -->
+              <div class="flex items-center gap-3 cursor-pointer" onclick="switchTab('dashboard')">
+                <div class="w-10 h-10 bg-brand-600 rounded-xl flex items-center justify-center text-white shadow-md shadow-brand-500/20">
+                  <i class="fa-solid fa-mug-hot text-lg"></i>
+                </div>
+                <div>
+                  <h1 class="font-bold text-slate-900 dark:text-white leading-tight">Crew Break</h1>
+                  <p class="text-[10px] text-slate-500 dark:text-slate-400 font-medium tracking-wide uppercase">Attendance System</p>
+                </div>
+              </div>
+
+              <!-- Desktop Menu Tabs -->
+              <nav class="hidden md:flex items-center gap-1">
+                ${navItems.map(item => `
+                  <button 
+                    onclick="switchTab('${item.id}')"
+                    class="px-3.5 py-2 rounded-xl text-sm font-medium transition flex items-center gap-2 relative ${
+                      active === item.id 
+                        ? 'bg-brand-50 dark:bg-brand-900/40 text-brand-600 dark:text-brand-400 font-semibold' 
+                        : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700/60 hover:text-slate-900 dark:hover:text-white'
+                    }"
+                  >
+                    <i class="fa-solid ${item.icon} ${item.highlight ? 'text-brand-600 dark:text-brand-400' : ''}"></i>
+                    <span>${item.label}</span>
+                    ${item.badge ? `<span class="ml-1 px-1.5 py-0.5 text-[10px] bg-rose-500 text-white font-bold rounded-full">${item.badge}</span>` : ''}
+                  </button>
+                `).join('')}
+              </nav>
+
+              <!-- Theme Toggle, User Info & Logout -->
+              <div class="flex items-center gap-2">
+                <!-- Theme Mode Toggle Button -->
+                <button 
+                  onclick="toggleTheme()" 
+                  title="Ganti Mode Gelap / Terang"
+                  class="p-2.5 text-slate-500 dark:text-slate-400 hover:text-amber-500 dark:hover:text-amber-400 hover:bg-slate-100 dark:hover:bg-slate-700/60 rounded-xl transition flex items-center justify-center"
+                >
+                  <i class="fa-solid ${APP_STATE.theme === 'dark' ? 'fa-sun text-amber-400 text-lg' : 'fa-moon text-lg'}"></i>
+                </button>
+
+                <div class="hidden sm:flex flex-col text-right ml-1">
+                  <span class="text-xs font-semibold text-slate-800 dark:text-slate-200">${APP_STATE.currentUser.name}</span>
+                  <span class="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold flex items-center justify-end gap-1">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span> Manager Active
+                  </span>
+                </div>
+                <button 
+                  onclick="handleLogout()" 
+                  title="Logout"
+                  class="p-2.5 text-slate-500 dark:text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded-xl transition"
+                >
+                  <i class="fa-solid fa-right-from-bracket"></i>
+                </button>
+              </div>
+
+            </div>
+          </div>
+        </header>
+
+        <!-- Mobile Bottom Navigation Bar -->
+        <div class="md:hidden fixed bottom-0 left-0 right-0 bg-white dark:bg-slate-800 border-t border-slate-200 dark:border-slate-700 z-40 px-2 py-1 shadow-2xl flex items-center justify-around transition-colors">
+          <button onclick="switchTab('dashboard')" class="flex flex-col items-center py-1.5 px-2 rounded-lg ${active === 'dashboard' ? 'text-brand-600 dark:text-brand-400' : 'text-slate-500 dark:text-slate-400'}">
+            <i class="fa-solid fa-chart-pie text-lg"></i>
+            <span class="text-[10px] mt-0.5 font-medium">Dashboard</span>
+          </button>
+
+          <button onclick="switchTab('active')" class="flex flex-col items-center py-1.5 px-2 rounded-lg relative ${active === 'active' ? 'text-brand-600 dark:text-brand-400' : 'text-slate-500 dark:text-slate-400'}">
+            <i class="fa-solid fa-clock text-lg"></i>
+            <span class="text-[10px] mt-0.5 font-medium">Active</span>
+            ${activeBreaksCount ? `<span class="absolute top-1 right-2 w-2 h-2 bg-rose-500 rounded-full"></span>` : ''}
+          </button>
+
+          <!-- Prominent Scan Floating Hub -->
+          <button onclick="switchTab('scan')" class="-mt-5 w-14 h-14 bg-brand-600 hover:bg-brand-700 text-white rounded-full flex items-center justify-center shadow-lg shadow-brand-600/40 border-4 border-slate-50 dark:border-slate-900 transition transform active:scale-95">
+            <i class="fa-solid fa-qrcode text-xl"></i>
+          </button>
+
+          <button onclick="switchTab('history')" class="flex flex-col items-center py-1.5 px-2 rounded-lg ${active === 'history' ? 'text-brand-600 dark:text-brand-400' : 'text-slate-500 dark:text-slate-400'}">
+            <i class="fa-solid fa-rectangle-list text-lg"></i>
+            <span class="text-[10px] mt-0.5 font-medium">History</span>
+          </button>
+
+          <button onclick="switchTab('crews')" class="flex flex-col items-center py-1.5 px-2 rounded-lg ${active === 'crews' ? 'text-brand-600 dark:text-brand-400' : 'text-slate-500 dark:text-slate-400'}">
+            <i class="fa-solid fa-users text-lg"></i>
+            <span class="text-[10px] mt-0.5 font-medium">Crew</span>
+          </button>
+        </div>
+      `;
+    }
+
+    function renderDashboardView() {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const totalCrewCount = APP_STATE.crews.filter(c => c.status === 'Active').length;
+      const activeBreaks = APP_STATE.breaks.filter(b => b.status === 'ON BREAK');
+      const todayBreaks = APP_STATE.breaks.filter(b => b.date === todayStr);
+      
+      let totalDurationSecondsToday = 0;
+      todayBreaks.forEach(b => {
+        if (b.status === 'COMPLETED' && b.durationSeconds) {
+          totalDurationSecondsToday += b.durationSeconds;
+        } else if (b.status === 'ON BREAK') {
+          totalDurationSecondsToday += getElapsedTimeInSeconds(b.startTime);
+        }
+      });
+
+      return `
+        <div class="space-y-6 pb-20 md:pb-8">
+          
+          <!-- Welcome Banner -->
+          <div class="bg-gradient-to-r from-brand-900 via-brand-700 to-slate-900 rounded-3xl p-6 md:p-8 text-white shadow-xl relative overflow-hidden">
+            <div class="absolute right-0 top-0 bottom-0 w-1/3 opacity-10 flex items-center justify-center pointer-events-none">
+              <i class="fa-solid fa-barcode text-9xl"></i>
+            </div>
+            <div class="relative z-10 max-w-2xl">
+              <span class="px-3 py-1 bg-white/20 backdrop-blur-md rounded-full text-xs font-semibold tracking-wide uppercase inline-block mb-3">Manager Control Center</span>
+              <h2 class="text-2xl md:text-3xl font-extrabold tracking-tight">Crew Break Attendance</h2>
+              <p class="mt-2 text-slate-200 text-sm leading-relaxed">
+                Scan barcode/QR code crew untuk memulai atau menyelesaikan sesi istirahat secara instan dan akurat.
+              </p>
+              
+              <div class="mt-6 flex flex-wrap gap-3">
+                <button 
+                  onclick="switchTab('scan')"
+                  class="px-6 py-3 bg-white text-brand-900 font-bold rounded-2xl shadow-lg hover:bg-brand-50 transition flex items-center gap-2 transform active:scale-95"
+                >
+                  <i class="fa-solid fa-qrcode text-lg text-brand-600"></i>
+                  <span>MULAI SCAN CREW</span>
+                </button>
+
+                <button 
+                  onclick="switchTab('active')"
+                  class="px-5 py-3 bg-white/10 hover:bg-white/20 backdrop-blur-md text-white font-semibold rounded-2xl transition flex items-center gap-2"
+                >
+                  <i class="fa-solid fa-clock"></i>
+                  <span>Lihat Active Break (${activeBreaks.length})</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Summary Metric Cards -->
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            
+            <!-- Card 1: Total Crew -->
+            <div class="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-col justify-between hover:shadow-md transition">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Total Crew</span>
+                <div class="w-9 h-9 rounded-xl bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 flex items-center justify-center">
+                  <i class="fa-solid fa-users text-sm"></i>
+                </div>
+              </div>
+              <div class="mt-4">
+                <span class="text-3xl font-extrabold text-slate-900 dark:text-white">${totalCrewCount}</span>
+                <span class="text-xs text-slate-500 dark:text-slate-400 font-medium ml-1">aktif</span>
+              </div>
+            </div>
+
+            <!-- Card 2: On Break Now -->
+            <div class="bg-white dark:bg-slate-800 p-5 rounded-2xl border ${activeBreaks.length > 0 ? 'border-amber-300 dark:border-amber-500/50 bg-amber-50/30 dark:bg-amber-950/20' : 'border-slate-200 dark:border-slate-700'} shadow-sm flex flex-col justify-between hover:shadow-md transition">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Sedang Break</span>
+                <div class="w-9 h-9 rounded-xl bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 flex items-center justify-center">
+                  <i class="fa-solid fa-mug-hot text-sm"></i>
+                </div>
+              </div>
+              <div class="mt-4 flex items-baseline justify-between">
+                <span class="text-3xl font-extrabold text-slate-900 dark:text-white">${activeBreaks.length}</span>
+                ${activeBreaks.length > 0 ? `<span class="text-xs font-bold text-amber-600 dark:text-amber-400 animate-pulse">Monitoring Active</span>` : '<span class="text-xs text-slate-400">Idle</span>'}
+              </div>
+            </div>
+
+            <!-- Card 3: Today's Breaks -->
+            <div class="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-col justify-between hover:shadow-md transition">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Break Hari Ini</span>
+                <div class="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+                  <i class="fa-solid fa-circle-check text-sm"></i>
+                </div>
+              </div>
+              <div class="mt-4">
+                <span class="text-3xl font-extrabold text-slate-900 dark:text-white">${todayBreaks.length}</span>
+                <span class="text-xs text-slate-500 dark:text-slate-400 font-medium ml-1">sesi</span>
+              </div>
+            </div>
+
+            <!-- Card 4: Total Duration Today -->
+            <div class="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-col justify-between hover:shadow-md transition">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Total Durasi Today</span>
+                <div class="w-9 h-9 rounded-xl bg-purple-50 dark:bg-purple-900/40 text-purple-600 dark:text-purple-400 flex items-center justify-center">
+                  <i class="fa-solid fa-hourglass-half text-sm"></i>
+                </div>
+              </div>
+              <div class="mt-4">
+                <span class="text-2xl font-extrabold text-slate-900 dark:text-white">${formatDuration(totalDurationSecondsToday)}</span>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- Quick Active Break Grid & Mini Scanner shortcut -->
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            
+            <!-- Active Break Mini Monitor -->
+            <div class="lg:col-span-2 bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 p-6 shadow-sm">
+              <div class="flex items-center justify-between mb-4">
+                <div>
+                  <h3 class="font-bold text-slate-900 dark:text-white text-base">Crew Sedang Istirahat Saat Ini</h3>
+                  <p class="text-xs text-slate-500 dark:text-slate-400">Pantau secara realtime durasi break crew</p>
+                </div>
+                <button onclick="switchTab('active')" class="text-xs font-bold text-brand-600 dark:text-brand-400 hover:underline">Lihat Semua <i class="fa-solid fa-arrow-right ml-1"></i></button>
+              </div>
+
+              ${activeBreaks.length === 0 ? `
+                <div class="py-12 text-center bg-slate-50 dark:bg-slate-900/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-700">
+                  <i class="fa-solid fa-circle-check text-3xl text-slate-300 dark:text-slate-600 mb-2"></i>
+                  <p class="text-sm font-semibold text-slate-600 dark:text-slate-300">Tidak ada crew yang sedang break</p>
+                  <p class="text-xs text-slate-400 mt-1">Seluruh crew sedang bertugas di pos masing-masing.</p>
+                </div>
+              ` : `
+                <div class="space-y-3">
+                  ${activeBreaks.slice(0, 4).map(b => {
+                    const elapsed = getElapsedTimeInSeconds(b.startTime);
+                    const limitSec = (b.maxMinutes || 30) * 60;
+                    const isOver = elapsed > limitSec;
+                    const isNear = elapsed > (limitSec * 0.8) && !isOver;
+
+                    let badgeColor = 'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800';
+                    let timerColor = 'text-emerald-600 dark:text-emerald-400';
+                    if (isOver) {
+                      badgeColor = 'bg-rose-100 dark:bg-rose-900/50 text-rose-800 dark:text-rose-300 border-rose-200 dark:border-rose-800 pulse-amber';
+                      timerColor = 'text-rose-600 dark:text-rose-400 font-extrabold';
+                    } else if (isNear) {
+                      badgeColor = 'bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800';
+                      timerColor = 'text-amber-600 dark:text-amber-400 font-bold';
+                    }
+
+                    return `
+                      <div class="flex items-center justify-between p-4 rounded-2xl border border-slate-100 dark:border-slate-700/60 bg-slate-50/80 dark:bg-slate-900/40 hover:bg-white dark:hover:bg-slate-700/40 hover:shadow-sm transition">
+                        <div class="flex items-center gap-3">
+                          <div class="w-10 h-10 rounded-xl bg-brand-100 dark:bg-brand-900/60 text-brand-700 dark:text-brand-300 font-bold flex items-center justify-center text-sm">
+                            ${b.crewName.substring(0, 2).toUpperCase()}
+                          </div>
+                          <div>
+                            <div class="flex items-center gap-2">
+                              <h4 class="font-bold text-slate-900 dark:text-white text-sm">${b.crewName}</h4>
+                              <span class="text-[10px] font-semibold px-2 py-0.5 rounded-md border ${badgeColor}">${b.breakType}</span>
+                            </div>
+                            <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Mulai: ${formatTime(b.startTime)} • Max: ${b.maxMinutes || 30} mnt</p>
+                          </div>
+                        </div>
+
+                        <div class="text-right">
+                          <div class="text-sm font-mono ${timerColor} live-timer" data-start="${b.startTime}">${formatDuration(elapsed)}</div>
+                          <button onclick="handleQuickEndBreak('${b.crewId}')" class="mt-1 text-[11px] font-bold text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-100 dark:hover:bg-rose-900/60 px-2.5 py-1 rounded-lg transition">
+                            Selesaikan Break
+                          </button>
+                        </div>
+                      </div>
+                    `;
+                  }).join('')}
+                </div>
+              `}
+            </div>
+
+            <!-- Quick Simulator Scanner Box for Easy Testing -->
+            <div class="bg-gradient-to-br from-slate-900 to-brand-950 rounded-3xl p-6 text-white flex flex-col justify-between shadow-xl">
+              <div>
+                <div class="flex items-center justify-between mb-4">
+                  <span class="text-xs font-bold uppercase tracking-wider text-brand-400">Pindai Cepat</span>
+                  <i class="fa-solid fa-bolt text-amber-400"></i>
+                </div>
+                <h3 class="text-lg font-bold">Simulasi Scanner QR Code</h3>
+                <p class="text-xs text-slate-300 mt-1">Uji coba instan tanpa membuka kamera dengan memilih ID Crew terdaftar di bawah ini.</p>
+                
+                <div class="mt-5 space-y-3">
+                  <label class="block text-xs font-semibold text-slate-300">Pilih ID Crew untuk di-scan:</label>
+                  <select id="sim-crew-select" class="w-full py-2.5 px-3 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                    ${APP_STATE.crews.map(c => `<option value="${c.crewId}">${c.crewId} - ${c.name} (${c.position})</option>`).join('')}
+                  </select>
+
+                  <button 
+                    onclick="handleSimulateScan()" 
+                    class="w-full py-3 bg-brand-500 hover:bg-brand-600 text-white font-bold rounded-xl shadow-lg transition flex items-center justify-center gap-2"
+                  >
+                    <i class="fa-solid fa-expand"></i>
+                    <span>Proses Scan Kode Ini</span>
+                  </button>
+                </div>
+              </div>
+
+              <div class="mt-6 pt-4 border-t border-slate-800 text-center">
+                <a href="#" onclick="switchTab('scan'); return false;" class="text-xs font-semibold text-brand-400 hover:text-brand-300">
+                  <i class="fa-solid fa-camera mr-1"></i> Buka Kamera Scanner Utama
+                </a>
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+      `;
+    }
+
+    function renderScanView() {
+      return `
+        <div class="max-w-xl mx-auto space-y-6 pb-20 md:pb-8">
+          
+          <div class="text-center">
+            <h2 class="text-2xl font-bold text-slate-900 dark:text-white">Scanner QR / Barcode Crew</h2>
+            <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Arahkan kamera ke QR Code / Barcode yang tertera pada ID Card Crew</p>
+          </div>
+
+          <!-- Camera Stream Container -->
+          <div class="bg-white dark:bg-slate-800 p-4 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-md transition-colors">
+            <div id="reader" class="overflow-hidden rounded-2xl bg-black min-h-[280px] relative flex items-center justify-center">
+              <p class="text-slate-400 text-xs text-center px-4" id="scanner-placeholder">
+                <i class="fa-solid fa-camera text-3xl mb-2 block"></i>
+                Memuat scanner kamera...
+              </p>
+            </div>
+
+            <!-- Controls -->
+            <div class="mt-4 flex items-center justify-between gap-3">
+              <button 
+                onclick="toggleCameraScanner()" 
+                id="btn-toggle-cam"
+                class="flex-1 py-2.5 px-4 bg-brand-600 hover:bg-brand-700 text-white text-xs font-bold rounded-xl transition flex items-center justify-center gap-2"
+              >
+                <i class="fa-solid fa-video"></i>
+                <span>Aktifkan Kamera</span>
+              </button>
+
+              <button 
+                onclick="openManualInputModal()" 
+                class="py-2.5 px-4 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-xs font-bold rounded-xl transition flex items-center justify-center gap-2"
+              >
+                <i class="fa-solid fa-keyboard"></i>
+                <span>Ketik Manual</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Active Scan Result Banner Modal / Card -->
+          <div id="scan-result-container">
+            ${APP_STATE.activeScanResult ? renderScanResultCard(APP_STATE.activeScanResult) : ''}
+          </div>
+
+        </div>
+      `;
+    }
+
+    function renderScanResultCard(crew) {
+      if (!crew) return '';
+
+      // Check if crew is currently on break
+      const activeBreak = APP_STATE.breaks.find(b => b.crewId === crew.crewId && b.status === 'ON BREAK');
+
+      if (activeBreak) {
+        // Crew is currently ON BREAK -> Show END BREAK option
+        const elapsed = getElapsedTimeInSeconds(activeBreak.startTime);
+        return `
+          <div class="bg-amber-50 dark:bg-amber-950/40 rounded-3xl border-2 border-amber-300 dark:border-amber-600/80 p-6 shadow-xl animate-fade-in space-y-4">
+            <div class="flex items-center justify-between border-b border-amber-200/80 dark:border-amber-800/80 pb-3">
+              <div class="flex items-center gap-3">
+                <div class="w-12 h-12 rounded-2xl bg-amber-500 text-white flex items-center justify-center font-bold text-lg">
+                  <i class="fa-solid fa-mug-hot"></i>
+                </div>
+                <div>
+                  <span class="px-2.5 py-0.5 bg-amber-200 dark:bg-amber-900/80 text-amber-900 dark:text-amber-200 text-[10px] font-bold rounded-md uppercase tracking-wider">Status: Sedang Break</span>
+                  <h3 class="text-lg font-extrabold text-slate-900 dark:text-white">${crew.name}</h3>
+                  <p class="text-xs text-slate-600 dark:text-slate-300">${crew.position} (${crew.crewId})</p>
+                </div>
+              </div>
+              <button onclick="clearScanResult()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1">
+                <i class="fa-solid fa-xmark text-lg"></i>
+              </button>
+            </div>
+
+            <div class="bg-white dark:bg-slate-800 p-4 rounded-2xl border border-amber-100 dark:border-amber-900/40 space-y-2 text-sm">
+              <div class="flex justify-between text-xs text-slate-600 dark:text-slate-300">
+                <span>Jenis Break:</span>
+                <span class="font-bold text-slate-800 dark:text-white">${activeBreak.breakType}</span>
+              </div>
+              <div class="flex justify-between text-xs text-slate-600 dark:text-slate-300">
+                <span>Mulai Break:</span>
+                <span class="font-semibold text-slate-800 dark:text-white">${formatTime(activeBreak.startTime)}</span>
+              </div>
+              <div class="flex justify-between items-center text-sm pt-2 border-t border-slate-100 dark:border-slate-700">
+                <span class="font-bold text-slate-700 dark:text-slate-200">Durasi Berjalan:</span>
+                <span class="font-mono text-xl font-extrabold text-amber-600 dark:text-amber-400 live-timer" data-start="${activeBreak.startTime}">${formatDuration(elapsed)}</span>
+              </div>
+            </div>
+
+            <button 
+              onclick="executeEndBreak('${activeBreak.id}')"
+              class="w-full py-4 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-2xl shadow-lg shadow-rose-600/30 transition flex items-center justify-center gap-2 text-base active:scale-98"
+            >
+              <i class="fa-solid fa-circle-stop text-xl"></i>
+              <span>SELESAIKAN BREAK (END BREAK)</span>
+            </button>
+          </div>
+        `;
+      } else {
+        // Crew is NOT on break -> Show START BREAK options
+        return `
+          <div class="bg-emerald-50 dark:bg-emerald-950/40 rounded-3xl border-2 border-emerald-300 dark:border-emerald-600/80 p-6 shadow-xl animate-fade-in space-y-4">
+            <div class="flex items-center justify-between border-b border-emerald-200/80 dark:border-emerald-800/80 pb-3">
+              <div class="flex items-center gap-3">
+                <div class="w-12 h-12 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-bold text-lg">
+                  <i class="fa-solid fa-user-check"></i>
+                </div>
+                <div>
+                  <span class="px-2.5 py-0.5 bg-emerald-200 dark:bg-emerald-900/80 text-emerald-900 dark:text-emerald-200 text-[10px] font-bold rounded-md uppercase tracking-wider">Crew Ditemukan - SIAP BREAK</span>
+                  <h3 class="text-lg font-extrabold text-slate-900 dark:text-white">${crew.name}</h3>
+                  <p class="text-xs text-slate-600 dark:text-slate-300">${crew.position} • Dept: ${crew.department} (${crew.crewId})</p>
+                </div>
+              </div>
+              <button onclick="clearScanResult()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1">
+                <i class="fa-solid fa-xmark text-lg"></i>
+              </button>
+            </div>
+
+            <div>
+              <label class="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-2">Pilih Jenis Break:</label>
+              <div class="grid grid-cols-2 gap-2" id="break-type-selector">
+                ${APP_STATE.breakTypes.map((bt, index) => `
+                  <label class="cursor-pointer border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-3 rounded-xl flex flex-col justify-between hover:border-brand-500 dark:hover:border-brand-400 transition has-[:checked]:border-brand-600 dark:has-[:checked]:border-brand-400 has-[:checked]:bg-brand-50/50 dark:has-[:checked]:bg-brand-900/30 has-[:checked]:ring-2 has-[:checked]:ring-brand-500">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-bold text-slate-800 dark:text-slate-200">${bt.name}</span>
+                      <input type="radio" name="selected_break_type" value="${bt.name}" data-max="${bt.maxMinutes}" ${index === 0 ? 'checked' : ''} class="text-brand-600 focus:ring-brand-500">
+                    </div>
+                    <span class="text-[10px] text-slate-500 dark:text-slate-400 mt-1">Maksimal ${bt.maxMinutes} menit</span>
+                  </label>
+                `).join('')}
+              </div>
+            </div>
+
+            <button 
+              onclick="executeStartBreak('${crew.crewId}')"
+              class="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-2xl shadow-lg shadow-emerald-600/30 transition flex items-center justify-center gap-2 text-base active:scale-98"
+            >
+              <i class="fa-solid fa-play text-xl"></i>
+              <span>MULAI BREAK SEKARANG (START BREAK)</span>
+            </button>
+          </div>
+        `;
+      }
+    }
+
+    function processScanBarcode(code) {
+      const trimmedCode = code.trim().toUpperCase();
+      const crew = APP_STATE.crews.find(c => c.crewId.toUpperCase() === trimmedCode);
+
+      if (!crew) {
+        showToast(`✕ QR Code / ID Crew "${trimmedCode}" tidak ditemukan!`, 'error');
+        return;
+      }
+
+      if (crew.status === 'Inactive') {
+        showToast(`⚠ Crew ${crew.name} dalam status Non-Aktif.`, 'warning');
+        return;
+      }
+
+      APP_STATE.activeScanResult = crew;
+      showToast(`✓ Crew ditemukan: ${crew.name} (${crew.crewId})`, 'success');
+      
+      const container = document.getElementById('scan-result-container');
+      if (container) {
+        container.innerHTML = renderScanResultCard(crew);
+      } else {
+        renderApp();
+      }
+    }
+
+    function executeStartBreak(crewId) {
+      const crew = APP_STATE.crews.find(c => c.crewId === crewId);
+      if (!crew) return;
+
+      // Ensure crew is not already on break
+      const existing = APP_STATE.breaks.find(b => b.crewId === crewId && b.status === 'ON BREAK');
+      if (existing) {
+        showToast(`⚠ ${crew.name} sudah sedang dalam sesi break.`, 'warning');
+        return;
+      }
+
+      const radioBtn = document.querySelector('input[name="selected_break_type"]:checked');
+      const breakTypeName = radioBtn ? radioBtn.value : 'Meal Break';
+      const maxMins = radioBtn ? parseInt(radioBtn.getAttribute('data-max') || '30') : 30;
+
+      const now = new Date();
+      const newBreak = {
+        id: 'brk_' + Date.now(),
+        crewId: crew.crewId,
+        crewName: crew.name,
+        position: crew.position,
+        breakType: breakTypeName,
+        maxMinutes: maxMins,
+        startTime: now.toISOString(),
+        endTime: null,
+        durationSeconds: null,
+        startedBy: APP_STATE.currentUser.email,
+        endedBy: null,
+        status: 'ON BREAK',
+        date: now.toISOString().split('T')[0]
+      };
+
+      APP_STATE.breaks.unshift(newBreak);
+      addAuditLog('START BREAK', crew.crewId, crew.name);
+      saveData();
+
+      showToast(`✓ Break ${crew.name} berhasil dimulai pada ${formatTime(now.toISOString())}`, 'success');
+      APP_STATE.activeScanResult = null;
+      switchTab('active');
+    }
+
+    function executeEndBreak(breakId) {
+      const breakRecord = APP_STATE.breaks.find(b => b.id === breakId);
+      if (!breakRecord) return;
+
+      const now = new Date();
+      const durationSec = getElapsedTimeInSeconds(breakRecord.startTime);
+
+      breakRecord.endTime = now.toISOString();
+      breakRecord.durationSeconds = durationSec;
+      breakRecord.endedBy = APP_STATE.currentUser.email;
+      breakRecord.status = 'COMPLETED';
+
+      addAuditLog('END BREAK', breakRecord.crewId, breakRecord.crewName);
+      saveData();
+
+      const durationFormatted = formatDuration(durationSec);
+      showToast(`✓ Break ${breakRecord.crewName} selesai. Total Durasi: ${durationFormatted}`, 'success');
+
+      APP_STATE.activeScanResult = null;
+      switchTab('history');
+    }
+
+    function handleQuickEndBreak(crewId) {
+      const activeBreak = APP_STATE.breaks.find(b => b.crewId === crewId && b.status === 'ON BREAK');
+      if (activeBreak) {
+        executeEndBreak(activeBreak.id);
+      }
+    }
+
+    function handleSimulateScan() {
+      const select = document.getElementById('sim-crew-select');
+      if (select && select.value) {
+        switchTab('scan');
+        setTimeout(() => {
+          processScanBarcode(select.value);
+        }, 100);
+      }
+    }
+
+    function clearScanResult() {
+      APP_STATE.activeScanResult = null;
+      const container = document.getElementById('scan-result-container');
+      if (container) container.innerHTML = '';
+    }
+
+    function toggleCameraScanner() {
+      if (APP_STATE.scanner) {
+        stopScanner();
+      } else {
+        startScanner();
+      }
+    }
+
+    function startScanner() {
+      const placeholder = document.getElementById('scanner-placeholder');
+      if (placeholder) placeholder.style.display = 'none';
+
+      try {
+        APP_STATE.scanner = new Html5Qrcode("reader");
+        APP_STATE.scanner.start(
+          { facingMode: "environment" },
+          {
+            fps: 10,
+            qrbox: { width: 250, height: 250 }
+          },
+          (decodedText) => {
+            // Scanner success callback
+            processScanBarcode(decodedText);
+          },
+          (errorMessage) => {
+            // parse error, ignore standard scanning frames
+          }
+        ).catch(err => {
+          showToast("Tidak dapat mengakses kamera: " + err, "error");
+          if (placeholder) placeholder.style.display = 'block';
+        });
+
+        const btn = document.getElementById('btn-toggle-cam');
+        if (btn) {
+          btn.innerHTML = `<i class="fa-solid fa-video-slash"></i> <span>Matikan Kamera</span>`;
+          btn.classList.replace('bg-brand-600', 'bg-rose-600');
+          btn.classList.replace('hover:bg-brand-700', 'hover:bg-rose-700');
+        }
+      } catch (e) {
+        showToast("Gagal memuat library scanner.", "error");
+      }
+    }
+
+    function stopScanner() {
+      if (APP_STATE.scanner) {
+        APP_STATE.scanner.stop().then(() => {
+          APP_STATE.scanner = null;
+          const btn = document.getElementById('btn-toggle-cam');
+          if (btn) {
+            btn.innerHTML = `<i class="fa-solid fa-video"></i> <span>Aktifkan Kamera</span>`;
+            btn.classList.replace('bg-rose-600', 'bg-brand-600');
+            btn.classList.replace('hover:bg-rose-700', 'hover:bg-brand-700');
+          }
+        }).catch(err => {
+          APP_STATE.scanner = null;
+        });
+      }
+    }
+
+    function openManualInputModal() {
+      const crewCode = prompt("Masukkan ID Crew (Contoh: CRW001):");
+      if (crewCode) {
+        processScanBarcode(crewCode);
+      }
+    }
+
+    function renderActiveBreakView() {
+      const activeBreaks = APP_STATE.breaks.filter(b => b.status === 'ON BREAK');
+
+      return `
+        <div class="space-y-6 pb-20 md:pb-8">
+          
+          <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <h2 class="text-2xl font-bold text-slate-900 dark:text-white">Active Break Monitoring</h2>
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Daftar crew yang sedang menjalani masa istirahat secara realtime</p>
+            </div>
+
+            <div class="flex items-center gap-2">
+              <span class="px-3 py-1 bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-300 text-xs font-bold rounded-xl flex items-center gap-2 border border-amber-200 dark:border-amber-800">
+                <span class="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
+                <span>${activeBreaks.length} Crew Sedang Istirahat</span>
+              </span>
+            </div>
+          </div>
+
+          ${activeBreaks.length === 0 ? `
+            <div class="bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 p-12 text-center shadow-sm">
+              <div class="w-16 h-16 bg-slate-100 dark:bg-slate-700 text-slate-400 dark:text-slate-300 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl">
+                <i class="fa-solid fa-mug-hot"></i>
+              </div>
+              <h3 class="font-bold text-slate-800 dark:text-white text-lg">Tidak Ada Crew Sedang Break</h3>
+              <p class="text-slate-500 dark:text-slate-400 text-xs mt-1 max-w-md mx-auto">Saat ini seluruh crew sedang bekerja di posnya masing-masing. Tekan tombol scan jika ada crew yang hendak mulai break.</p>
+              <button onclick="switchTab('scan')" class="mt-6 px-6 py-2.5 bg-brand-600 text-white font-bold rounded-xl text-xs hover:bg-brand-700 transition">
+                <i class="fa-solid fa-qrcode mr-2"></i> Scan Barcode Crew
+              </button>
+            </div>
+          ` : `
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              ${activeBreaks.map(b => {
+                const elapsed = getElapsedTimeInSeconds(b.startTime);
+                const limitSec = (b.maxMinutes || 30) * 60;
+                const isOver = elapsed > limitSec;
+                const isNear = elapsed > (limitSec * 0.8) && !isOver;
+
+                let cardBorder = 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800';
+                let badgeStyle = 'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-800 dark:text-emerald-300';
+                let timerStyle = 'text-emerald-600 dark:text-emerald-400';
+                let statusText = 'Normal';
+
+                if (isOver) {
+                  cardBorder = 'border-2 border-rose-400 dark:border-rose-500 bg-rose-50/40 dark:bg-rose-950/30';
+                  badgeStyle = 'bg-rose-500 text-white animate-pulse';
+                  timerStyle = 'text-rose-600 dark:text-rose-400 font-extrabold';
+                  statusText = 'MELEWATI BATAS!';
+                } else if (isNear) {
+                  cardBorder = 'border-2 border-amber-300 dark:border-amber-500 bg-amber-50/40 dark:bg-amber-950/30';
+                  badgeStyle = 'bg-amber-500 text-white';
+                  timerStyle = 'text-amber-600 dark:text-amber-400 font-bold';
+                  statusText = 'Mendekati Batas';
+                }
+
+                return `
+                  <div class="rounded-3xl p-5 border shadow-sm flex flex-col justify-between ${cardBorder} transition hover:shadow-md">
+                    <div>
+                      <div class="flex items-center justify-between">
+                        <span class="text-[10px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-lg ${badgeStyle}">${statusText}</span>
+                        <span class="text-xs font-mono font-semibold text-slate-500 dark:text-slate-400">${b.crewId}</span>
+                      </div>
+
+                      <div class="mt-4 flex items-center gap-3">
+                        <div class="w-12 h-12 rounded-2xl bg-brand-100 dark:bg-brand-900/60 text-brand-700 dark:text-brand-300 font-extrabold flex items-center justify-center text-base">
+                          ${b.crewName.substring(0, 2).toUpperCase()}
+                        </div>
+                        <div>
+                          <h3 class="font-bold text-slate-900 dark:text-white text-base">${b.crewName}</h3>
+                          <p class="text-xs text-slate-500 dark:text-slate-400">${b.position}</p>
+                        </div>
+                      </div>
+
+                      <div class="mt-4 pt-3 border-t border-slate-100 dark:border-slate-700/60 space-y-2 text-xs">
+                        <div class="flex justify-between text-slate-600 dark:text-slate-300">
+                          <span>Jenis Break:</span>
+                          <span class="font-bold text-slate-800 dark:text-white">${b.breakType}</span>
+                        </div>
+                        <div class="flex justify-between text-slate-600 dark:text-slate-300">
+                          <span>Waktu Mulai:</span>
+                          <span class="font-semibold text-slate-800 dark:text-white">${formatTime(b.startTime)}</span>
+                        </div>
+                        <div class="flex justify-between text-slate-600 dark:text-slate-300">
+                          <span>Batas Maksimal:</span>
+                          <span class="font-semibold text-slate-800 dark:text-white">${b.maxMinutes || 30} Menit</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="mt-6 pt-4 border-t border-slate-100 dark:border-slate-700/60">
+                      <div class="text-center mb-3">
+                        <span class="text-[10px] uppercase tracking-wider font-bold text-slate-400 block">Durasi Berjalan</span>
+                        <span class="text-2xl font-mono ${timerStyle} live-timer" data-start="${b.startTime}">${formatDuration(elapsed)}</span>
+                      </div>
+
+                      <button 
+                        onclick="handleQuickEndBreak('${b.crewId}')"
+                        class="w-full py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl transition shadow-md active:scale-95 flex items-center justify-center gap-1.5"
+                      >
+                        <i class="fa-solid fa-square-check"></i>
+                        <span>SELESAIKAN BREAK</span>
+                      </button>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          `}
+
+        </div>
+      `;
+    }
+
+    function renderHistoryView() {
+      const filters = APP_STATE.historyFilters;
+      let filtered = APP_STATE.breaks.filter(b => {
+        if (filters.date && b.date !== filters.date) return false;
+        if (filters.crewId && !b.crewId.toLowerCase().includes(filters.crewId.toLowerCase()) && !b.crewName.toLowerCase().includes(filters.crewId.toLowerCase())) return false;
+        if (filters.breakType && b.breakType !== filters.breakType) return false;
+        if (filters.status && b.status !== filters.status) return false;
+        return true;
+      });
+
+      return `
+        <div class="space-y-6 pb-20 md:pb-8">
+          
+          <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <h2 class="text-2xl font-bold text-slate-900 dark:text-white">Riwayat Break Crew</h2>
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Seluruh rekap data sesi istirahat yang pernah tersimpan</p>
+            </div>
+
+            <button 
+              onclick="exportToExcel()"
+              class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs shadow-md transition flex items-center gap-2 self-start md:self-auto"
+            >
+              <i class="fa-solid fa-file-excel text-base"></i>
+              <span>EXPORT EXCEL (.XLSX)</span>
+            </button>
+          </div>
+
+          <!-- Filter Toolbar -->
+          <div class="bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div>
+              <label class="block text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400 mb-1">Cari Crew / ID</label>
+              <input 
+                type="text" 
+                value="${filters.crewId}" 
+                oninput="updateHistoryFilter('crewId', this.value)"
+                placeholder="Nama atau ID Crew..." 
+                class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-800 dark:text-slate-100 rounded-xl text-xs focus:bg-white dark:focus:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-brand-500"
+              >
+            </div>
+
+            <div>
+              <label class="block text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400 mb-1">Filter Tanggal</label>
+              <input 
+                type="date" 
+                value="${filters.date}" 
+                onchange="updateHistoryFilter('date', this.value)"
+                class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-800 dark:text-slate-100 rounded-xl text-xs focus:bg-white dark:focus:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-brand-500"
+              >
+            </div>
+
+            <div>
+              <label class="block text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400 mb-1">Jenis Break</label>
+              <select 
+                onchange="updateHistoryFilter('breakType', this.value)"
+                class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-800 dark:text-slate-100 rounded-xl text-xs focus:bg-white dark:focus:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-brand-500"
+              >
+                <option value="">Semua Jenis Break</option>
+                ${APP_STATE.breakTypes.map(bt => `<option value="${bt.name}" ${filters.breakType === bt.name ? 'selected' : ''}>${bt.name}</option>`).join('')}
+              </select>
+            </div>
+
+            <div>
+              <label class="block text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400 mb-1">Status</label>
+              <select 
+                onchange="updateHistoryFilter('status', this.value)"
+                class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-800 dark:text-slate-100 rounded-xl text-xs focus:bg-white dark:focus:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-brand-500"
+              >
+                <option value="">Semua Status</option>
+                <option value="ON BREAK" ${filters.status === 'ON BREAK' ? 'selected' : ''}>ON BREAK</option>
+                <option value="COMPLETED" ${filters.status === 'COMPLETED' ? 'selected' : ''}>COMPLETED</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- History Data Table -->
+          <div class="bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+            <div class="overflow-x-auto custom-scrollbar">
+              <table class="w-full text-left border-collapse">
+                <thead>
+                  <tr class="bg-slate-50 dark:bg-slate-700/50 border-b border-slate-200 dark:border-slate-700 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    <th class="py-3.5 px-4">Tanggal</th>
+                    <th class="py-3.5 px-4">Crew</th>
+                    <th class="py-3.5 px-4">Jenis Break</th>
+                    <th class="py-3.5 px-4">Mulai</th>
+                    <th class="py-3.5 px-4">Selesai</th>
+                    <th class="py-3.5 px-4">Durasi</th>
+                    <th class="py-3.5 px-4">Manager</th>
+                    <th class="py-3.5 px-4">Status</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/60 text-xs text-slate-700 dark:text-slate-300">
+                  ${filtered.length === 0 ? `
+                    <tr>
+                      <td colspan="8" class="text-center py-10 text-slate-400 dark:text-slate-500">
+                        Tidak ada data riwayat yang cocok dengan filter.
+                      </td>
+                    </tr>
+                  ` : filtered.map(b => `
+                    <tr class="hover:bg-slate-50/80 dark:hover:bg-slate-700/40 transition">
+                      <td class="py-3 px-4 font-medium">${formatDate(b.startTime)}</td>
+                      <td class="py-3 px-4">
+                        <div class="font-bold text-slate-900 dark:text-white">${b.crewName}</div>
+                        <div class="text-[10px] text-slate-400 dark:text-slate-500 font-mono">${b.crewId} • ${b.position}</div>
+                      </td>
+                      <td class="py-3 px-4">
+                        <span class="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-200 font-medium">${b.breakType}</span>
+                      </td>
+                      <td class="py-3 px-4 font-mono">${formatTime(b.startTime)}</td>
+                      <td class="py-3 px-4 font-mono">${b.endTime ? formatTime(b.endTime) : '-'}</td>
+                      <td class="py-3 px-4 font-mono font-bold text-slate-900 dark:text-white">
+                        ${b.status === 'ON BREAK' ? `<span class="text-amber-600 dark:text-amber-400">Berjalan...</span>` : formatDuration(b.durationSeconds)}
+                      </td>
+                      <td class="py-3 px-4 text-slate-500 dark:text-slate-400">${b.startedBy}</td>
+                      <td class="py-3 px-4">
+                        ${b.status === 'ON BREAK' ? 
+                          `<span class="px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800">ON BREAK</span>` : 
+                          `<span class="px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-emerald-100 dark:bg-emerald-900/50 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">COMPLETED</span>`}
+                      </td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+        </div>
+      `;
+    }
+
+    function updateHistoryFilter(key, val) {
+      APP_STATE.historyFilters[key] = val;
+      renderApp();
+    }
+
+    function exportToExcel() {
+      const data = APP_STATE.breaks.map(b => ({
+        'Tanggal': formatDate(b.startTime),
+        'Crew ID': b.crewId,
+        'Nama Crew': b.crewName,
+        'Posisi': b.position,
+        'Jenis Break': b.breakType,
+        'Jam Mulai': formatTime(b.startTime),
+        'Jam Selesai': b.endTime ? formatTime(b.endTime) : 'Sedang Break',
+        'Durasi': b.durationSeconds ? formatDuration(b.durationSeconds) : '-',
+        'Manager Scanner': b.startedBy,
+        'Status': b.status
+      }));
+
+      const worksheet = XLSX.utils.json_to_sheet(data);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Break Attendance");
+
+      const todayStr = new Date().toISOString().split('T')[0];
+      XLSX.writeFile(workbook, `Crew_Break_Report_${todayStr}.xlsx`);
+      showToast("✓ Report Excel berhasil di-export!", "success");
+    }
+
+    function renderCrewManagementView() {
+      const crews = APP_STATE.crews;
+
+      return `
+        <div class="space-y-6 pb-20 md:pb-8">
+          
+          <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <h2 class="text-2xl font-bold text-slate-900 dark:text-white">Data & QR Code Crew</h2>
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Kelola informasi anggota crew, status aktif, serta cetak ID Card QR Code</p>
+            </div>
+
+            <button 
+              onclick="openAddCrewModal()"
+              class="px-5 py-2.5 bg-brand-600 hover:bg-brand-700 text-white font-bold rounded-xl text-xs shadow-md transition flex items-center gap-2 self-start md:self-auto"
+            >
+              <i class="fa-solid fa-user-plus text-sm"></i>
+              <span>TAMBAH CREW BARU</span>
+            </button>
+          </div>
+
+          <!-- Crew Cards Grid -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            ${crews.map(c => `
+              <div class="bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 p-5 shadow-sm flex flex-col justify-between hover:shadow-md transition">
+                <div>
+                  <div class="flex items-center justify-between">
+                    <span class="font-mono text-xs font-bold text-brand-600 dark:text-brand-400 px-2.5 py-1 bg-brand-50 dark:bg-brand-900/40 rounded-lg">${c.crewId}</span>
+                    <span class="px-2 py-0.5 rounded-md text-[10px] font-bold ${c.status === 'Active' ? 'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-800 dark:text-emerald-300' : 'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400'}">
+                      ${c.status}
+                    </span>
+                  </div>
+
+                  <div class="mt-4">
+                    <h3 class="text-base font-bold text-slate-900 dark:text-white">${c.name}</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">${c.position} • Dept: ${c.department}</p>
+                    ${c.phone ? `<p class="text-xs text-slate-400 dark:text-slate-500 mt-1"><i class="fa-solid fa-phone text-[10px] mr-1"></i>${c.phone}</p>` : ''}
+                  </div>
+                </div>
+
+                <div class="mt-6 pt-4 border-t border-slate-100 dark:border-slate-700/60 flex items-center justify-between gap-2">
+                  <button 
+                    onclick="openQrModal('${c.crewId}')"
+                    class="flex-1 py-2 bg-slate-100 dark:bg-slate-700 hover:bg-brand-50 dark:hover:bg-brand-900/30 text-slate-700 dark:text-slate-200 hover:text-brand-600 dark:hover:text-brand-400 text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5"
+                  >
+                    <i class="fa-solid fa-qrcode"></i>
+                    <span>Lihat / Cetak QR</span>
+                  </button>
+
+                  <button 
+                    onclick="toggleCrewStatus('${c.crewId}')"
+                    class="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-700 transition"
+                    title="${c.status === 'Active' ? 'Nonaktifkan Crew' : 'Aktifkan Crew'}"
+                  >
+                    <i class="fa-solid ${c.status === 'Active' ? 'fa-user-xmark text-amber-600 dark:text-amber-400' : 'fa-user-check text-emerald-600 dark:text-emerald-400'}"></i>
+                  </button>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+
+        </div>
+      `;
+    }
+
+    function renderReportsView() {
+      const totalBreaks = APP_STATE.breaks.length;
+      const completedBreaks = APP_STATE.breaks.filter(b => b.status === 'COMPLETED');
+      
+      let avgDurationSec = 0;
+      if (completedBreaks.length > 0) {
+        const sum = completedBreaks.reduce((acc, curr) => acc + (curr.durationSeconds || 0), 0);
+        avgDurationSec = Math.round(sum / completedBreaks.length);
+      }
+
+      return `
+        <div class="space-y-6 pb-20 md:pb-8">
+          
+          <div>
+            <h2 class="text-2xl font-bold text-slate-900 dark:text-white">Laporan Analytics Istirahat</h2>
+            <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Ringkasan statistik penggunaan waktu break crew secara keseluruhan</p>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div class="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+              <span class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Total Sesi Break</span>
+              <p class="text-3xl font-extrabold text-slate-900 dark:text-white mt-2">${totalBreaks}</p>
+            </div>
+
+            <div class="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+              <span class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Rata-Rata Durasi Break</span>
+              <p class="text-3xl font-extrabold text-brand-600 dark:text-brand-400 mt-2">${formatDuration(avgDurationSec)}</p>
+            </div>
+
+            <div class="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+              <span class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Crew Terdaftar</span>
+              <p class="text-3xl font-extrabold text-emerald-600 dark:text-emerald-400 mt-2">${APP_STATE.crews.length}</p>
+            </div>
+          </div>
+
+          <div class="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-sm">
+            <h3 class="font-bold text-slate-900 dark:text-white mb-4 text-sm">Visualisasi Distribusi Jenis Break</h3>
+            <div class="h-64 flex items-center justify-center">
+              <canvas id="breakChart"></canvas>
+            </div>
+          </div>
+
+        </div>
+      `;
+    }
+
+    function initReportChart() {
+      const ctx = document.getElementById('breakChart');
+      if (!ctx) return;
+
+      const typeCounts = {};
+      APP_STATE.breakTypes.forEach(bt => typeCounts[bt.name] = 0);
+      APP_STATE.breaks.forEach(b => {
+        if (typeCounts[b.breakType] !== undefined) {
+          typeCounts[b.breakType]++;
+        }
+      });
+
+      const isDark = APP_STATE.theme === 'dark';
+
+      new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: Object.keys(typeCounts),
+          datasets: [{
+            label: 'Jumlah Sesi Break',
+            data: Object.values(typeCounts),
+            backgroundColor: ['#0284c7', '#10b981', '#f59e0b', '#8b5cf6'],
+            borderRadius: 8
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false }
+          },
+          scales: {
+            x: {
+              ticks: { color: isDark ? '#94a3b8' : '#64748b' },
+              grid: { color: isDark ? '#334155' : '#e2e8f0' }
+            },
+            y: {
+              ticks: { color: isDark ? '#94a3b8' : '#64748b' },
+              grid: { color: isDark ? '#334155' : '#e2e8f0' }
+            }
+          }
+        }
+      });
+    }
+
+    function renderSettingsView() {
+      return `
+        <div class="max-w-3xl space-y-6 pb-20 md:pb-8">
+          
+          <div>
+            <h2 class="text-2xl font-bold text-slate-900 dark:text-white">Pengaturan Sistem & Integrasi</h2>
+            <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Kelola tema tampilan, integrasi Google Sheets, dan audit log</p>
+          </div>
+
+          <!-- Theme Preference Control Card -->
+          <div class="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-sm space-y-4">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-amber-100 dark:bg-amber-900/50 text-amber-600 dark:text-amber-400 flex items-center justify-center font-bold text-lg">
+                  <i class="fa-solid ${APP_STATE.theme === 'dark' ? 'fa-moon' : 'fa-sun'}"></i>
+                </div>
+                <div>
+                  <h3 class="font-bold text-slate-900 dark:text-white text-sm">Tema Tampilan Aplikasi</h3>
+                  <p class="text-xs text-slate-500 dark:text-slate-400">Pilih antara Mode Terang (Light) atau Mode Gelap (Dark)</p>
+                </div>
+              </div>
+
+              <button 
+                onclick="toggleTheme()" 
+                class="px-4 py-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-100 font-bold rounded-xl text-xs transition flex items-center gap-2"
+              >
+                <i class="fa-solid ${APP_STATE.theme === 'dark' ? 'fa-sun text-amber-400' : 'fa-moon'}"></i>
+                <span>${APP_STATE.theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Google Sheets Webhook Integration -->
+          <div class="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-sm space-y-4">
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-400 flex items-center justify-center font-bold text-lg">
+                <i class="fa-solid fa-file-csv"></i>
+              </div>
+              <div>
+                <h3 class="font-bold text-slate-900 dark:text-white text-sm">Integrasi Google Sheets Automatic Sync</h3>
+                <p class="text-xs text-slate-500 dark:text-slate-400">Kirim data transaksi break yang selesai secara otomatis ke Google Spreadsheet</p>
+              </div>
+            </div>
+
+            <div class="space-y-3 pt-2">
+              <div>
+                <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Google Apps Script Webhook URL</label>
+                <input 
+                  type="url" 
+                  id="sheets-url-input" 
+                  value="${APP_STATE.settings.googleSheetsUrl}" 
+                  placeholder="https://script.google.com/macros/s/.../exec"
+                  class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-800 dark:text-slate-100 rounded-xl text-xs focus:bg-white dark:focus:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                >
+              </div>
+
+              <div class="flex items-center justify-between pt-2">
+                <button 
+                  onclick="saveSheetsConfig()" 
+                  class="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white font-bold rounded-xl text-xs transition"
+                >
+                  Simpan URL Webhook
+                </button>
+
+                <button 
+                  onclick="showToast('Sistem siap menyinkronkan data saat sesi break diselesaikan.', 'info')" 
+                  class="px-4 py-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold rounded-xl text-xs transition"
+                >
+                  Uji Koneksi Sync
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Audit Log Section -->
+          <div class="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-sm">
+            <h3 class="font-bold text-slate-900 dark:text-white text-sm mb-3">System Audit Logs</h3>
+            <div class="space-y-2 max-h-60 overflow-y-auto custom-scrollbar text-xs">
+              ${APP_STATE.auditLogs.map(log => `
+                <div class="p-2.5 bg-slate-50 dark:bg-slate-700/50 rounded-xl flex items-center justify-between">
+                  <div>
+                    <span class="font-bold text-slate-800 dark:text-slate-200">${log.action}</span>
+                    <span class="text-slate-500 dark:text-slate-400"> - ${log.crewName} (${log.crewId})</span>
+                  </div>
+                  <span class="text-[10px] text-slate-400 dark:text-slate-500">${formatTime(log.timestamp)}</span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+
+        </div>
+      `;
+    }
+
+    function renderModals() {
+      if (!APP_STATE.activeModal) return '';
+
+      if (APP_STATE.activeModal === 'addCrew') {
+        return `
+          <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div class="bg-white dark:bg-slate-800 rounded-3xl max-w-md w-full p-6 shadow-2xl animate-fade-in space-y-5 border border-slate-100 dark:border-slate-700">
+              <div class="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 pb-3">
+                <h3 class="font-bold text-slate-900 dark:text-white text-base">Tambah Data Crew Baru</h3>
+                <button onclick="closeModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"><i class="fa-solid fa-xmark text-lg"></i></button>
+              </div>
+
+              <form onsubmit="handleCreateCrew(event)" class="space-y-4 text-xs">
+                <div>
+                  <label class="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Nama Lengkap Crew</label>
+                  <input type="text" id="crew-name" required placeholder="Contoh: Budi Santoso" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-800 dark:text-slate-100 rounded-xl focus:bg-white dark:focus:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-brand-500">
+                </div>
+
+                <div>
+                  <label class="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Posisi / Jabatan</label>
+                  <input type="text" id="crew-position" required placeholder="Contoh: Senior Barista" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-800 dark:text-slate-100 rounded-xl focus:bg-white dark:focus:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-brand-500">
+                </div>
+
+                <div>
+                  <label class="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Departemen</label>
+                  <input type="text" id="crew-dept" required placeholder="Contoh: Service" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-800 dark:text-slate-100 rounded-xl focus:bg-white dark:focus:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-brand-500">
+                </div>
+
+                <div>
+                  <label class="block font-semibold text-slate-700 dark:text-slate-300 mb-1">No. Telepon / Whatsapp (Opsional)</label>
+                  <input type="tel" id="crew-phone" placeholder="08123456789" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-800 dark:text-slate-100 rounded-xl focus:bg-white dark:focus:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-brand-500">
+                </div>
+
+                <div class="pt-3 flex gap-2">
+                  <button type="button" onclick="closeModal()" class="flex-1 py-3 bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 transition">Batal</button>
+                  <button type="submit" class="flex-1 py-3 bg-brand-600 text-white font-bold rounded-xl hover:bg-brand-700 transition">Simpan Crew</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        `;
+      }
+
+      if (APP_STATE.activeModal === 'qrCode' && APP_STATE.selectedCrewForModal) {
+        const c = APP_STATE.selectedCrewForModal;
+        return `
+          <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div class="bg-white dark:bg-slate-800 rounded-3xl max-w-sm w-full p-6 shadow-2xl animate-fade-in text-center space-y-4 border border-slate-100 dark:border-slate-700">
+              
+              <div class="flex justify-between items-center border-b border-slate-100 dark:border-slate-700 pb-2">
+                <span class="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Kartu QR Code Crew</span>
+                <button onclick="closeModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"><i class="fa-solid fa-xmark text-lg"></i></button>
+              </div>
+
+              <!-- Printable ID Card Container -->
+              <div id="printable-qr-card" class="p-6 bg-gradient-to-b from-slate-900 via-brand-950 to-slate-900 text-white rounded-3xl shadow-xl space-y-4 border border-slate-800">
+                <div class="flex items-center justify-center gap-2">
+                  <i class="fa-solid fa-mug-hot text-brand-400"></i>
+                  <span class="font-bold text-xs tracking-wider uppercase">Crew Pass</span>
+                </div>
+
+                <div id="qr-code-display" class="bg-white p-3 rounded-2xl inline-block shadow-inner"></div>
+
+                <div>
+                  <h3 class="text-lg font-extrabold text-white">${c.name}</h3>
+                  <p class="text-xs text-brand-300 font-medium">${c.position}</p>
+                  <div class="mt-2 inline-block px-3 py-1 bg-white/10 rounded-full font-mono text-xs font-bold text-emerald-400 border border-white/20">
+                    ID: ${c.crewId}
+                  </div>
+                </div>
+              </div>
+
+              <div class="flex gap-2">
+                <button onclick="window.print()" class="flex-1 py-2.5 bg-brand-600 hover:bg-brand-700 text-white text-xs font-bold rounded-xl transition">
+                  <i class="fa-solid fa-print mr-1"></i> Cetak Card
+                </button>
+                <button onclick="closeModal()" class="py-2.5 px-4 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-xs font-bold rounded-xl transition">
+                  Tutup
+                </button>
+              </div>
+
+            </div>
+          </div>
+        `;
+      }
+
+      return '';
+    }
+
+    function renderApp() {
+      const appEl = document.getElementById('app');
+      
+      if (!APP_STATE.currentUser) {
+        appEl.innerHTML = renderLoginView();
+        return;
+      }
+
+      let mainViewContent = '';
+      switch (APP_STATE.activeTab) {
+        case 'dashboard':
+          mainViewContent = renderDashboardView();
+          break;
+        case 'scan':
+          mainViewContent = renderScanView();
+          break;
+        case 'active':
+          mainViewContent = renderActiveBreakView();
+          break;
+        case 'history':
+          mainViewContent = renderHistoryView();
+          break;
+        case 'crews':
+          mainViewContent = renderCrewManagementView();
+          break;
+        case 'reports':
+          mainViewContent = renderReportsView();
+          break;
+        case 'settings':
+          mainViewContent = renderSettingsView();
+          break;
+        default:
+          mainViewContent = renderDashboardView();
+      }
+
+      appEl.innerHTML = `
+        ${renderNavigation()}
+        <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          ${mainViewContent}
+        </main>
+        ${renderModals()}
+      `;
+
+      if (APP_STATE.activeTab === 'reports') {
+        setTimeout(initReportChart, 50);
+      }
+    }
+
+    // Interval to update live duration timers on active break elements
+    setInterval(() => {
+      const timerEls = document.querySelectorAll('.live-timer');
+      timerEls.forEach(el => {
+        const startTime = el.getAttribute('data-start');
+        if (startTime) {
+          const elapsed = getElapsedTimeInSeconds(startTime);
+          el.textContent = formatDuration(elapsed);
+        }
+      });
+    }, 1000);
+
+    // Initial page initialization
+    window.onload = function() {
+      initSeedData();
+      renderApp();
+    };
+  </script>
+
+</body>
+</html>
